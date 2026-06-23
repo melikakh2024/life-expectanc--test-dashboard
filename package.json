@@ -1,0 +1,14 @@
+{
+  "name": "05b000a2314d18ea",
+  "main": "05b000a2314d18ea@23.js",
+  "version": "23.0.0",
+  "homepage": "https://observablehq.com/d/05b000a2314d18ea",
+  "author": {
+    "name": "melika",
+    "url": "https://observablehq.com/@melika2"
+  },
+  "type": "module",
+  "peerDependencies": {
+    "@observablehq/runtime": "4 - 5"
+  }
+}
