@@ -538,7 +538,6 @@ export default function define(runtime, observer) {
   main.variable(observer("topojson")).define("topojson", ["require"], _topojson);
   main.variable(observer("growthData")).define("growthData", ["d3"], _growthData);
   main.variable(observer()).define(["growthData"], _4);
-  main.variable(observer()).define(["growthData","d3","topojson"], _5);
-  main.variable(observer()).define(["growthData","d3","topojson"], _6);
+
   return main;
 }
