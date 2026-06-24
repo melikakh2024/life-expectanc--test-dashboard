@@ -1,14 +1,254 @@
 <!DOCTYPE html>
-<meta charset="utf-8">
-<title>Untitled</title>
-<link rel="stylesheet" type="text/css" href="./inspector.css">
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Life Expectancy Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a1a2e; display: flex; justify-content: center; padding: 20px; }
+  </style>
+</head>
 <body>
-<script type="module">
+<div id="app"></div>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+<script>
+(async function() {
+  const lifeData = await fetch("https://ourworldindata.org/grapher/life-expectancy.csv")
+    .then(r => r.text()).then(text => d3.csvParse(text))
 
-import define from "./index.js";
-import {Runtime, Library, Inspector} from "./runtime.js";
+  const world = await fetch("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json")
+    .then(r => r.json())
 
-const runtime = new Runtime();
-const main = runtime.module(define, Inspector.into(document.body));
+  const iso = await fetch("https://raw.githubusercontent.com/lukes/ISO-3166-Countries-with-Regional-Codes/master/all/all.json")
+    .then(r => r.json())
 
+  const valueCol = "Life expectancy"
+  const allYears = [...new Set(lifeData.map(item => +item.Year))].sort()
+  const dataMap = new Map(lifeData.map(item => [`${item.Code}_${item.Year}`, +item[valueCol]]))
+  const entities = [...new Set(lifeData.map(item => item.Entity))].sort()
+
+  const W = 900, H = 460
+  let curYear = 2000
+  let playing = false
+  let animTimer = null
+  let activeTab = "map"
+
+  const colorScale = d3.scaleSequential().domain([30, 85]).interpolator(d3.interpolateRdYlGn)
+  const projection = d3.geoNaturalEarth1().scale(153).translate([W/2, H/2])
+  const pathGen = d3.geoPath().projection(projection)
+  const countryFeatures = topojson.feature(world, world.objects.countries).features
+
+  const getA3 = (feat) =>
+    iso.find(c => c['country-code'] === String(+feat.id).padStart(3,'0'))?.['alpha-3']
+
+  const app = d3.select("#app")
+  const wrap = app.append("div")
+    .style("font-family","sans-serif").style("background","#1a1a2e")
+    .style("color","#fff").style("border-radius","10px")
+    .style("overflow","hidden").style("width", W+"px")
+
+  wrap.append("div")
+    .style("padding","16px 20px 8px").style("font-size","20px").style("font-weight","bold")
+    .text("Life Expectancy Around the World")
+
+  const tabBar = wrap.append("div")
+    .style("display","flex").style("gap","4px").style("padding","0 20px")
+    .style("border-bottom","1px solid rgba(255,255,255,0.1)")
+
+  const tabDefs = ["map","line","table"]
+  const tabButtons = tabBar.selectAll("div").data(tabDefs).join("div")
+    .text(tab => tab==="map"?"🗺 Map":tab==="line"?"📈 Line":"📋 Table")
+    .style("padding","8px 16px").style("cursor","pointer").style("font-size","13px")
+    .style("border-bottom", tab => tab===activeTab?"2px solid #e94560":"2px solid transparent")
+    .style("color", tab => tab===activeTab?"#e94560":"#aaa")
+    .on("click", function(event, tab) {
+      activeTab = tab
+      tabButtons
+        .style("border-bottom", x => x===tab?"2px solid #e94560":"2px solid transparent")
+        .style("color", x => x===tab?"#e94560":"#aaa")
+      mapSec.style("display", tab==="map"?"block":"none")
+      lineSec.style("display", tab==="line"?"block":"none")
+      tableSec.style("display", tab==="table"?"block":"none")
+    })
+
+  const controls = wrap.append("div")
+    .style("display","flex").style("align-items","center").style("gap","12px")
+    .style("padding","10px 20px").style("background","rgba(255,255,255,0.05)")
+
+  const btn = controls.append("button").text("▶ Play")
+    .style("padding","6px 16px").style("background","#e94560").style("color","#fff")
+    .style("border","none").style("border-radius","4px").style("cursor","pointer").style("font-size","13px")
+
+  const sliderEl = controls.append("input")
+    .attr("type","range").attr("min",allYears[0]).attr("max",allYears[allYears.length-1])
+    .attr("value",curYear).attr("step",1).style("width","500px")
+
+  const yearDisp = controls.append("span")
+    .style("font-size","18px").style("font-weight","bold").text(curYear)
+
+  // MAP
+  const mapSec = wrap.append("div")
+  const svg = mapSec.append("svg").attr("width",W).attr("height",H)
+  svg.append("rect").attr("width",W).attr("height",H).attr("fill","#0f3460")
+
+  const mapPaths = svg.selectAll("path").data(countryFeatures).join("path")
+    .attr("d", pathGen).attr("stroke","#ffffff22").attr("stroke-width",0.5)
+
+  const yrLabel = svg.append("text")
+    .attr("x",W-20).attr("y",H-20).attr("text-anchor","end")
+    .attr("font-size",56).attr("font-weight","bold").attr("fill","rgba(255,255,255,0.08)")
+
+  const defs = svg.append("defs")
+  const grad = defs.append("linearGradient").attr("id","legGrad")
+  const stopVals = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]
+  stopVals.forEach(s => grad.append("stop").attr("offset",s).attr("stop-color",colorScale(30+s*55)))
+  const lg = svg.append("g").attr("transform","translate(20,420)")
+  lg.append("rect").attr("width",200).attr("height",10).style("fill","url(#legGrad)")
+  lg.append("text").attr("x",0).attr("y",25).attr("fill","#fff").attr("font-size",11).text("30 yrs")
+  lg.append("text").attr("x",100).attr("y",25).attr("fill","#fff").attr("font-size",11).attr("text-anchor","middle").text("57 yrs")
+  lg.append("text").attr("x",200).attr("y",25).attr("fill","#fff").attr("font-size",11).attr("text-anchor","end").text("85 yrs")
+  lg.append("text").attr("x",100).attr("y",-5).attr("fill","#fff").attr("font-size",11).attr("text-anchor","middle").text("Life Expectancy")
+
+  const tooltip = d3.select("body").append("div")
+    .style("position","absolute").style("background","rgba(0,0,0,0.85)").style("color","#fff")
+    .style("padding","8px 12px").style("border-radius","6px").style("font-size","13px")
+    .style("pointer-events","none").style("display","none").style("border","1px solid #e94560")
+
+  mapPaths
+    .on("mousemove", (event, feat) => {
+      const a3 = getA3(feat)
+      const val = dataMap.get(`${a3}_${curYear}`)
+      const name = iso.find(c => c['country-code']===String(+feat.id).padStart(3,'0'))?.name
+      tooltip.style("display","block")
+        .style("left",(event.pageX+10)+"px").style("top",(event.pageY-30)+"px")
+        .html(val!==undefined
+          ? `<b>${name}</b><br>Life Expectancy: <b>${val.toFixed(1)} years</b><br>Year: ${curYear}`
+          : `<b>${name}</b><br>No data`)
+    })
+    .on("mouseleave", () => tooltip.style("display","none"))
+
+  // LINE
+  const lineSec = wrap.append("div").style("display","none").style("padding","20px")
+  lineSec.append("div").style("margin-bottom","8px").style("font-size","13px").style("color","#aaa")
+    .text("Select a country:")
+
+  const countrySelect = lineSec.append("select")
+    .style("background","#0f3460").style("color","#fff").style("border","1px solid #e94560")
+    .style("padding","4px 8px").style("border-radius","4px").style("margin-bottom","12px")
+  countrySelect.selectAll("option").data(entities).join("option").attr("value",e=>e).text(e=>e)
+
+  const lineSvg = lineSec.append("svg").attr("width",W-40).attr("height",350)
+
+  function drawLine(entity) {
+    lineSvg.selectAll("*").remove()
+    const pts = lifeData
+      .filter(item => item.Entity===entity && item[valueCol])
+      .map(item => ({yr:+item.Year, val:+item[valueCol]}))
+      .sort((a,b) => a.yr-b.yr)
+    const lw=W-80, lh=300
+    const xSc = d3.scaleLinear().domain(d3.extent(pts,p=>p.yr)).range([50,lw])
+    const ySc = d3.scaleLinear().domain([0,90]).range([lh,20])
+    lineSvg.selectAll(".gl").data(ySc.ticks(5)).join("line")
+      .attr("x1",50).attr("x2",lw).attr("y1",v=>ySc(v)).attr("y2",v=>ySc(v))
+      .attr("stroke","rgba(255,255,255,0.05)")
+    lineSvg.append("g").attr("transform",`translate(0,${lh})`)
+      .call(d3.axisBottom(xSc).tickFormat(v=>String(v)))
+      .selectAll("text").style("fill","#aaa").style("font-size","11px")
+    lineSvg.append("g").attr("transform","translate(50,0)")
+      .call(d3.axisLeft(ySc).tickFormat(v=>v+" yrs"))
+      .selectAll("text").style("fill","#aaa").style("font-size","11px")
+    lineSvg.append("path").datum(pts)
+      .attr("fill","rgba(233,69,96,0.15)")
+      .attr("d",d3.area().x(p=>xSc(p.yr)).y0(lh).y1(p=>ySc(p.val)))
+    lineSvg.append("path").datum(pts)
+      .attr("fill","none").attr("stroke","#e94560").attr("stroke-width",2.5)
+      .attr("d",d3.line().x(p=>xSc(p.yr)).y(p=>ySc(p.val)).curve(d3.curveCatmullRom))
+    const cv = pts.find(p=>p.yr===curYear)
+    if(cv) {
+      lineSvg.append("circle").attr("cx",xSc(cv.yr)).attr("cy",ySc(cv.val))
+        .attr("r",5).attr("fill","#e94560").attr("stroke","#fff").attr("stroke-width",2)
+      lineSvg.append("text").attr("x",xSc(cv.yr)+10).attr("y",ySc(cv.val)-8)
+        .attr("fill","#fff").attr("font-size",12).text(`${curYear}: ${cv.val.toFixed(1)} yrs`)
+    }
+    lineSvg.append("text").attr("x",(lw+50)/2).attr("y",12)
+      .attr("text-anchor","middle").attr("fill","#fff").attr("font-size",14).attr("font-weight","bold")
+      .text(`${entity} — Life Expectancy`)
+  }
+
+  drawLine("World")
+  countrySelect.on("change", function() { drawLine(this.value) })
+
+  // TABLE
+  const tableSec = wrap.append("div")
+    .style("display","none").style("padding","20px")
+    .style("max-height","420px").style("overflow-y","auto")
+
+  function drawTable(yr) {
+    tableSec.selectAll("*").remove()
+    tableSec.append("div").style("font-size","15px").style("font-weight","bold")
+      .style("margin-bottom","12px").text(`Life Expectancy by Country — ${yr}`)
+    const yData = lifeData.filter(item=>+item.Year===yr&&item[valueCol])
+      .map(item=>({entity:item.Entity,val:+item[valueCol]}))
+      .sort((a,b)=>b.val-a.val)
+    const tbl = tableSec.append("table").style("width","100%").style("border-collapse","collapse").style("font-size","13px")
+    const thead = tbl.append("thead").append("tr")
+    ;["#","Country","Life Expectancy"].forEach(col => {
+      thead.append("th").style("text-align","left").style("padding","8px 12px")
+        .style("border-bottom","1px solid rgba(255,255,255,0.2)").style("color","#e94560")
+        .style("position","sticky").style("top","0").style("background","#1a1a2e").text(col)
+    })
+    const tbody = tbl.append("tbody")
+    yData.forEach((entry,i) => {
+      const row = tbody.append("tr").style("border-bottom","1px solid rgba(255,255,255,0.05)")
+        .on("mouseover", function(){d3.select(this).style("background","rgba(233,69,96,0.1)")})
+        .on("mouseout", function(){d3.select(this).style("background","transparent")})
+      row.append("td").style("padding","6px 12px").style("color","#666").text(i+1)
+      row.append("td").style("padding","6px 12px").text(entry.entity)
+      const vc = row.append("td").style("padding","6px 12px")
+      vc.append("span").style("display","inline-block").style("width",Math.round((entry.val/90)*150)+"px")
+        .style("height","8px").style("background",colorScale(entry.val))
+        .style("border-radius","4px").style("margin-right","8px").style("vertical-align","middle")
+      vc.append("span").text(entry.val.toFixed(1)+" yrs")
+    })
+  }
+
+  drawTable(curYear)
+
+  function update(yr) {
+    curYear = yr
+    yrLabel.text(yr)
+    mapPaths.transition().duration(100).attr("fill", feat => {
+      const a3 = getA3(feat)
+      const val = dataMap.get(`${a3}_${yr}`)
+      return val!==undefined ? colorScale(val) : "#333"
+    })
+    sliderEl.property("value", yr)
+    yearDisp.text(yr)
+    drawTable(yr)
+    if(activeTab==="line") drawLine(countrySelect.property("value"))
+  }
+
+  btn.on("click", () => {
+    playing = !playing
+    btn.text(playing?"⏸ Pause":"▶ Play")
+    if(playing) {
+      animTimer = d3.interval(() => {
+        let idx = allYears.indexOf(curYear)
+        if(idx>=allYears.length-1){playing=false;btn.text("▶ Play");animTimer.stop();return}
+        update(allYears[idx+1])
+      }, 150)
+    } else { if(animTimer) animTimer.stop() }
+  })
+
+  sliderEl.on("input", function() {
+    if(animTimer) animTimer.stop()
+    playing=false; btn.text("▶ Play")
+    update(+this.value)
+  })
+
+  update(curYear)
+})()
 </script>
+</body>
+</html>
